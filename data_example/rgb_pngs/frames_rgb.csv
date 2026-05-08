@@ -1,0 +1,5 @@
+out_index,src_frame_index,timestamp_ms,file
+0,15,500,frame0000.png
+1,48,1600,frame0001.png
+2,80,2666,frame0002.png
+3,113,3766,frame0003.png
