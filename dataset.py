@@ -1,14 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-fusion_dataset_rgb_meta_pointnet2.py
+dataset.py
 
-融合数据集：RGB + (age, weight) + PointNet++ 输入点云
-
-特点：
-1. 支持 image_path/rgb_path 与 pcd_path/ply_path 双列名兼容；
-2. label / age / weight / rgb mean-std 全部使用训练集统计量；
-3. age / weight 始终返回，模型内部用开关决定是否启用，便于做消融时直接复用同一份 csv 与同一份 rgb+age+weight ckpt；
-4. 点云默认只做 x、y 中心化，z 保持原始值，与现有 PointNet++ 单分支保持一致。
+Dataset loader for segmented RGB images, meta-information, and 2048-point pig-back point clouds.
 """
 
 from __future__ import annotations

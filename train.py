@@ -1,18 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-train_regression_fusion_rgb_meta_pointnet2.py
+train.py
 
-训练脚本：
-1. PointNet++ + (RGB+Age+Weight) 融合；
-2. age / weight 输入开关；
-3. 可选两种融合头：
-   - gate_feature
-   - pred_weighted_residual
-4. 训练集统计量用于：
-   - label 标准化
-   - rgb 标准化
-   - age 标准化
-   - weight 标准化
+Training script for multimodal RGB-meta and PointNet++ fusion regression.
 """
 
 from __future__ import annotations
@@ -31,12 +21,12 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from fusion_dataset_rgb_meta_pointnet2 import (
+from dataset import (
     create_dataset,
     compute_scalar_stats,
     compute_rgb_stats,
 )
-from model_regression_fusion_rgb_meta_pointnet2 import (
+from fusion_model import (
     build_fusion_regression_model,
     FusionRegressionLoss,
 )
@@ -292,7 +282,7 @@ def evaluate_one_epoch(model, loader, criterion, device, label_mean: float, labe
 # 主函数
 # =========================
 def main():
-    parser = argparse.ArgumentParser(description="DGCNN + RGB(age,weight) 融合训练")
+    parser = argparse.ArgumentParser(description="Training script for RGB-meta and PointNet++ multimodal fusion regression")
 
     # 数据
     parser.add_argument("--train_csv", type=str, required=True)
@@ -316,7 +306,7 @@ def main():
     parser.add_argument("--check_files", type=int, default=1)
 
     # 分支输入开关（输入屏蔽式消融）
-    parser.add_argument("--use_age", type=int, default=0)
+    parser.add_argument("--use_age", type=int, default=1)
     parser.add_argument("--use_weight", type=int, default=1)
 
     # RGB 分支
@@ -333,7 +323,7 @@ def main():
     parser.add_argument("--rgb_pred_is_normalized", type=int, default=1)
     parser.add_argument("--freeze_rgb_branch", type=int, default=1)
 
-    # DGCNN 分支
+    #  PointNet++ branch
     parser.add_argument("--point_normal_channel", type=int, default=0)
     parser.add_argument("--point_dropout", type=float, default=0.4)
     parser.add_argument("--point_ckpt", type=str, default="")
@@ -341,7 +331,7 @@ def main():
     parser.add_argument("--freeze_point_branch", type=int, default=1)
 
     # 融合
-    parser.add_argument("--fusion_type", type=str, default="gate_feature", choices=["gate_feature", "pred_weighted_residual"])
+    parser.add_argument("--fusion_type", type=str, default="gate_feature")
     parser.add_argument("--proj_dim", type=int, default=256)
     parser.add_argument("--fusion_dropout", type=float, default=0.3)
     parser.add_argument("--pred_delta_scale", type=float, default=0.25)
@@ -498,7 +488,7 @@ def main():
     if args.point_ckpt.strip() != "":
         missing, unexpected = model.load_point_branch_checkpoint(args.point_ckpt, strict=False)
         print(f"[INFO] 已加载 PointNet++ 分支 ckpt: {args.point_ckpt}")
-        print(f"[INFO] DGCNN missing={len(missing)}, unexpected={len(unexpected)}")
+        print(f"[INFO] PointNet++ missing={len(missing)}, unexpected={len(unexpected)}")
 
     print(f"[INFO] total params     : {model.num_total_params():,}")
     print(f"[INFO] trainable params : {model.num_trainable_params():,}")

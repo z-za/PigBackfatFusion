@@ -1,14 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-model_regression_fusion_rgb_meta_pointnet2.py
+fusion_model.py
 
-最终融合模型：
-1. 点云分支使用 PointNet++ SSG；
-2. RGB 分支兼容现有 rgb+age+weight 单分支 ckpt；
-3. age / weight 通过输入屏蔽开关做消融；
-4. 支持两种融合方式：
-   - gate_feature           : 原版 gate 特征融合
-   - pred_weighted_residual : 预测加权 + 特征残差修正
+Multimodal fusion model for RGB-meta and PointNet++ backfat thickness regression.
 """
 
 from __future__ import annotations
