@@ -163,7 +163,7 @@ The current public dataset contains processed visual and geometric samples, incl
 
 The public dataset does not currently include ground-truth P2 backfat values, body-weight values, age information, or the CSV index files used for supervised training and validation. These metadata and CSV files will be released after the paper is published.
 
-The complete raw RGB-D video data are not included in the public dataset because of storage-size limitations. Raw RGB videos, raw depth videos, and additional acquisition information can be provided by the original authors upon reasonable request, subject to publication requirements, farm-data management rules, and reasonable-use conditions.
+The complete raw RGB-D video data are not included in the public dataset because of storage-size limitations. Raw RGB videos, raw depth videos, and additional acquisition information are available from the authors upon reasonable request.
 
 ## Notes
 
@@ -173,13 +173,8 @@ The complete raw RGB-D video data are not included in the public dataset because
 
 ## Citation
 
-If you use this repository, please cite the associated paper after publication:
+This repository is associated with the manuscript:
 
-```bibtex
-@article{zhang2026pigbackfatfusion,
-  title   = {Backfat thickness prediction in finishing pigs using multimodal information fusion in a sorting system},
-  author  = {Zhang, Zian and Li, Peng and Wu, Hongwei and Wang, Kelin and Liu, Longshen and Shen, Mingxia},
-  journal = {To be updated},
-  year    = {2026}
-}
-```
+**Backfat thickness prediction in finishing pigs using multimodal information fusion in a sorting system**
+
+The formal citation information will be updated after publication.
