@@ -20,6 +20,12 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 import open3d as o3d
 
+try:
+    from torchvision.transforms import InterpolationMode
+    _BILINEAR = InterpolationMode.BILINEAR
+except Exception:  # 兼容旧版 torchvision
+    _BILINEAR = Image.BILINEAR
+
 
 # =========================
 # 基础工具
@@ -147,12 +153,108 @@ def compute_rgb_stats(
 
 
 
-def build_rgb_transform(image_size=(480, 640), mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)):
-    return transforms.Compose([
-        transforms.Resize(image_size),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=mean, std=std),
-    ])
+def _clamp_tuple(v: Tuple[float, float], low: float, high: float) -> Tuple[float, float]:
+    a, b = float(v[0]), float(v[1])
+    a = max(low, min(high, a))
+    b = max(low, min(high, b))
+    if a > b:
+        a, b = b, a
+    return a, b
+
+
+class RandomSuppressColorMarks:
+    def __init__(self, p: float = 0.50, saturation_thr: float = 0.18, diff_thr: float = 25.0, min_value: float = 35.0):
+        self.p = max(0.0, min(1.0, float(p)))
+        self.saturation_thr = float(saturation_thr)
+        self.diff_thr = float(diff_thr)
+        self.min_value = float(min_value)
+
+    def __call__(self, img: Image.Image) -> Image.Image:
+        if self.p <= 0 or float(torch.rand(1).item()) > self.p:
+            return img
+
+        arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+        mx = arr.max(axis=2)
+        mn = arr.min(axis=2)
+        sat = (mx - mn) / np.maximum(mx, 1.0)
+
+        red_like = (r > g + self.diff_thr) & (r > b + self.diff_thr)
+        blue_like = (b > r + self.diff_thr) & (b > g + self.diff_thr)
+        mask = (mx > self.min_value) & (sat > self.saturation_thr) & (red_like | blue_like)
+
+        if mask.any():
+            gray = arr.mean(axis=2, keepdims=True)
+            gray3 = np.repeat(gray, 3, axis=2)
+            arr[mask] = gray3[mask]
+
+        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="RGB")
+
+
+def build_rgb_transform(
+    image_size=(480, 640),
+    mean=(0.485, 0.456, 0.406),
+    std=(0.229, 0.224, 0.225),
+    augment: bool = False,
+    aug_degrees: float = 8.0,
+    aug_translate: float = 0.08,
+    aug_scale_min: float = 0.90,
+    aug_scale_max: float = 1.10,
+    aug_brightness: float = 0.30,
+    aug_contrast: float = 0.25,
+    aug_saturation_min: float = 0.35,
+    aug_saturation_max: float = 0.95,
+    aug_hue: float = 0.03,
+    aug_grayscale_p: float = 0.10,
+    aug_erasing_p: float = 0.30,
+    aug_erasing_scale_min: float = 0.005,
+    aug_erasing_scale_max: float = 0.050,
+    aug_erasing_ratio_min: float = 0.30,
+    aug_erasing_ratio_max: float = 3.30,
+    aug_suppress_color_marks_p: float = 0.50,
+):
+    ops = [transforms.Resize(image_size)]
+
+    if augment:
+        translate = max(0.0, float(aug_translate))
+        scale = _clamp_tuple((aug_scale_min, aug_scale_max), 0.50, 2.00)
+        saturation = _clamp_tuple((aug_saturation_min, aug_saturation_max), 0.0, 2.0)
+        erasing_scale = _clamp_tuple((aug_erasing_scale_min, aug_erasing_scale_max), 1e-6, 1.0)
+        erasing_ratio = _clamp_tuple((aug_erasing_ratio_min, aug_erasing_ratio_max), 1e-3, 100.0)
+
+        ops.extend([
+            transforms.RandomAffine(
+                degrees=float(aug_degrees),
+                translate=(translate, translate),
+                scale=scale,
+                interpolation=_BILINEAR,
+                fill=(0, 0, 0),
+            ),
+            RandomSuppressColorMarks(p=float(aug_suppress_color_marks_p)),
+            transforms.ColorJitter(
+                brightness=float(aug_brightness),
+                contrast=float(aug_contrast),
+                saturation=saturation,
+                hue=float(aug_hue),
+            ),
+            transforms.RandomGrayscale(p=max(0.0, min(1.0, float(aug_grayscale_p)))),
+        ])
+
+    ops.append(transforms.ToTensor())
+
+    if augment and float(aug_erasing_p) > 0:
+        ops.append(
+            transforms.RandomErasing(
+                p=max(0.0, min(1.0, float(aug_erasing_p))),
+                scale=erasing_scale,
+                ratio=erasing_ratio,
+                value=0.0,
+                inplace=False,
+            )
+        )
+
+    ops.append(transforms.Normalize(mean=mean, std=std))
+    return transforms.Compose(ops)
 
 
 # =========================
@@ -178,6 +280,23 @@ class FusionRGBMetaPointNet2Dataset(Dataset):
         weight_std: Optional[float] = None,
         check_files: bool = True,
         dtype: torch.dtype = torch.float32,
+        augment: bool = False,
+        aug_degrees: float = 8.0,
+        aug_translate: float = 0.08,
+        aug_scale_min: float = 0.90,
+        aug_scale_max: float = 1.10,
+        aug_brightness: float = 0.30,
+        aug_contrast: float = 0.25,
+        aug_saturation_min: float = 0.35,
+        aug_saturation_max: float = 0.95,
+        aug_hue: float = 0.03,
+        aug_grayscale_p: float = 0.10,
+        aug_suppress_color_marks_p: float = 0.50,
+        aug_erasing_p: float = 0.30,
+        aug_erasing_scale_min: float = 0.005,
+        aug_erasing_scale_max: float = 0.050,
+        aug_erasing_ratio_min: float = 0.30,
+        aug_erasing_ratio_max: float = 3.30,
     ):
         super().__init__()
         if not os.path.isfile(csv_path):
@@ -231,7 +350,28 @@ class FusionRGBMetaPointNet2Dataset(Dataset):
         if abs(self.weight_std) < 1e-12:
             self.weight_std = 1.0
 
-        self.transform = build_rgb_transform(image_size=image_size, mean=rgb_mean, std=rgb_std)
+        self.transform = build_rgb_transform(
+            image_size=image_size,
+            mean=rgb_mean,
+            std=rgb_std,
+            augment=augment,
+            aug_degrees=aug_degrees,
+            aug_translate=aug_translate,
+            aug_scale_min=aug_scale_min,
+            aug_scale_max=aug_scale_max,
+            aug_brightness=aug_brightness,
+            aug_contrast=aug_contrast,
+            aug_saturation_min=aug_saturation_min,
+            aug_saturation_max=aug_saturation_max,
+            aug_hue=aug_hue,
+            aug_grayscale_p=aug_grayscale_p,
+            aug_suppress_color_marks_p=aug_suppress_color_marks_p,
+            aug_erasing_p=aug_erasing_p,
+            aug_erasing_scale_min=aug_erasing_scale_min,
+            aug_erasing_scale_max=aug_erasing_scale_max,
+            aug_erasing_ratio_min=aug_erasing_ratio_min,
+            aug_erasing_ratio_max=aug_erasing_ratio_max,
+        )
 
         if check_files:
             missing_img, missing_pcd = [], []
@@ -346,6 +486,23 @@ def create_dataset(
     weight_mean: Optional[float] = None,
     weight_std: Optional[float] = None,
     check_files: bool = True,
+    augment: bool = False,
+    aug_degrees: float = 8.0,
+    aug_translate: float = 0.08,
+    aug_scale_min: float = 0.90,
+    aug_scale_max: float = 1.10,
+    aug_brightness: float = 0.30,
+    aug_contrast: float = 0.25,
+    aug_saturation_min: float = 0.35,
+    aug_saturation_max: float = 0.95,
+    aug_hue: float = 0.03,
+    aug_grayscale_p: float = 0.10,
+    aug_suppress_color_marks_p: float = 0.50,
+    aug_erasing_p: float = 0.30,
+    aug_erasing_scale_min: float = 0.005,
+    aug_erasing_scale_max: float = 0.050,
+    aug_erasing_ratio_min: float = 0.30,
+    aug_erasing_ratio_max: float = 3.30,
 ):
     return FusionRGBMetaPointNet2Dataset(
         csv_path=csv_path,
@@ -364,6 +521,23 @@ def create_dataset(
         weight_mean=weight_mean,
         weight_std=weight_std,
         check_files=check_files,
+        augment=augment,
+        aug_degrees=aug_degrees,
+        aug_translate=aug_translate,
+        aug_scale_min=aug_scale_min,
+        aug_scale_max=aug_scale_max,
+        aug_brightness=aug_brightness,
+        aug_contrast=aug_contrast,
+        aug_saturation_min=aug_saturation_min,
+        aug_saturation_max=aug_saturation_max,
+        aug_hue=aug_hue,
+        aug_grayscale_p=aug_grayscale_p,
+        aug_suppress_color_marks_p=aug_suppress_color_marks_p,
+        aug_erasing_p=aug_erasing_p,
+        aug_erasing_scale_min=aug_erasing_scale_min,
+        aug_erasing_scale_max=aug_erasing_scale_max,
+        aug_erasing_ratio_min=aug_erasing_ratio_min,
+        aug_erasing_ratio_max=aug_erasing_ratio_max,
     )
 
 

@@ -79,16 +79,6 @@ class MetaMLP(nn.Module):
 
 
 class MobileNetV3MetaBranch(nn.Module):
-    """
-    为了兼容你现有 rgb+age+weight 单分支 ckpt，模块命名保持与 model_regression_meta_fusion.py 对齐。
-
-    注意：
-    - meta 输入固定为 2 维 [age, weight]；
-    - use_age / use_weight 只做输入屏蔽，不改网络结构，这样 best ckpt 可直接加载；
-    - hidden_feat 提取：
-        concat   -> regressor 最后一层前的隐藏层输出
-        residual -> delta_head 最后一层前的隐藏层输出
-    """
     def __init__(
         self,
         model_name: Literal["small", "large"] = "small",
@@ -190,19 +180,52 @@ class MobileNetV3MetaBranch(nn.Module):
 
     def _prepare_meta(self, meta: Optional[torch.Tensor], batch_size: int, dtype, device) -> torch.Tensor:
         if meta is None:
-            meta = torch.zeros(batch_size, 2, dtype=dtype, device=device)
+            return torch.zeros(batch_size, self.meta_dim, dtype=dtype, device=device)
+
         if meta.ndim == 1:
             meta = meta.unsqueeze(0)
-        if meta.ndim != 2 or meta.shape[1] != 2:
-            raise ValueError(f"meta 形状应为 [B,2]，实际为 {tuple(meta.shape)}")
+        if meta.ndim != 2:
+            raise ValueError(f"meta 形状应为 [B,C]，实际为 {tuple(meta.shape)}")
+
         meta = meta.to(device=device, dtype=dtype)
 
-        # 输入屏蔽式消融，保持结构不变，兼容 rgb+age+weight 单分支 ckpt
-        if not self.use_age:
-            meta[:, 0] = 0.0
-        if not self.use_weight:
-            meta[:, 1] = 0.0
-        return meta
+        if self.meta_dim == 2:
+            if meta.shape[1] == 1:
+                # 兼容极少数只提供单列 meta 的情况，将其放到启用的那一列。
+                full = torch.zeros(batch_size, 2, dtype=dtype, device=device)
+                if self.use_weight and not self.use_age:
+                    full[:, 1:2] = meta
+                else:
+                    full[:, 0:1] = meta
+                meta = full
+            elif meta.shape[1] >= 2:
+                meta = meta[:, :2].clone()
+            else:
+                raise ValueError(f"meta 形状应至少包含 1 列，实际为 {tuple(meta.shape)}")
+
+            if not self.use_age:
+                meta[:, 0] = 0.0
+            if not self.use_weight:
+                meta[:, 1] = 0.0
+            return meta
+
+        if self.meta_dim == 1:
+            if meta.shape[1] == 1:
+                return meta
+            if meta.shape[1] >= 2:
+                if self.use_weight and not self.use_age:
+                    return meta[:, 1:2]   # weight
+                if self.use_age and not self.use_weight:
+                    return meta[:, 0:1]   # age
+                raise ValueError(
+                    "当前 rgb_meta_dim=1，但 use_age/use_weight 设置不唯一。"
+                    "只用 weight 请设 --use_age 0 --use_weight 1；"
+                    "只用 age 请设 --use_age 1 --use_weight 0；"
+                    "age+weight ckpt 请设 --rgb_meta_dim 2。"
+                )
+            raise ValueError(f"meta 形状应至少包含 1 列，实际为 {tuple(meta.shape)}")
+
+        raise ValueError(f"仅支持 meta_dim=1 或 meta_dim=2，当前为 {self.meta_dim}")
 
     def forward(self, x: torch.Tensor, meta: Optional[torch.Tensor] = None):
         img_feat = self.extract_image_feature(x)
@@ -240,11 +263,6 @@ class MobileNetV3MetaBranch(nn.Module):
 # PointNet++ 分支（兼容单分支 ckpt）
 # =========================
 class PointNetSSGBranch(nn.Module):
-    """
-    严格沿用你之前 PointNet++ 融合版的单分支结构：
-    - hidden feat 取自 fc2 + bn2 + relu + dropout 后的 512 维
-    - 最终回归头为 fc3(512->1)
-    """
     def __init__(self, normal_channel: bool = False, dropout: float = 0.4):
         super().__init__()
         in_channel = 6 if normal_channel else 3
@@ -334,6 +352,7 @@ class RGBMetaPointNet2FusionRegressor(nn.Module):
         rgb_fusion_hidden_dim: int = 128,
         rgb_fusion_dropout: float = 0.2,
         rgb_delta_scale: float = 0.3,
+        rgb_meta_dim: int = 1,
         use_age: bool = True,
         use_weight: bool = True,
         # PointNet++ 分支
@@ -369,7 +388,7 @@ class RGBMetaPointNet2FusionRegressor(nn.Module):
             out_dim=1,
             dropout=rgb_dropout,
             freeze_backbone=False,
-            meta_dim=2,
+            meta_dim=rgb_meta_dim,
             branch_fusion_type=rgb_branch_fusion_type,
             meta_hidden_dim=rgb_meta_hidden_dim,
             meta_feat_dim=rgb_meta_feat_dim,

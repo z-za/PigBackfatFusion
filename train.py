@@ -294,7 +294,7 @@ def main():
     parser.add_argument("--normalize_age", type=int, default=1)
     parser.add_argument("--normalize_weight", type=int, default=1)
     parser.add_argument("--compute_rgb_stats", type=int, default=1)
-    parser.add_argument("--rgb_stats_max_samples", type=int, default=0, help="0 表示使用全部训练图像")
+    parser.add_argument("--rgb_stats_max_samples", type=int, default=0)
 
     # 数据加载
     parser.add_argument("--image_h", type=int, default=480)
@@ -304,6 +304,25 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--check_files", type=int, default=1)
+
+    # RGB 训练增强：仅作用于训练集；验证和测试阶段不启用随机增强。
+    parser.add_argument("--augment_train", type=int, default=1)
+    parser.add_argument("--aug_degrees", type=float, default=15.0)
+    parser.add_argument("--aug_translate", type=float, default=0.15)
+    parser.add_argument("--aug_scale_min", type=float, default=1.0)
+    parser.add_argument("--aug_scale_max", type=float, default=1.0)
+    parser.add_argument("--aug_brightness", type=float, default=0.30)
+    parser.add_argument("--aug_contrast", type=float, default=0.25)
+    parser.add_argument("--aug_saturation_min", type=float, default=0.35)
+    parser.add_argument("--aug_saturation_max", type=float, default=0.95)
+    parser.add_argument("--aug_hue", type=float, default=0.03)
+    parser.add_argument("--aug_grayscale_p", type=float, default=0.10)
+    parser.add_argument("--aug_suppress_color_marks_p", type=float, default=0.50)
+    parser.add_argument("--aug_erasing_p", type=float, default=0.0)
+    parser.add_argument("--aug_erasing_scale_min", type=float, default=0.005)
+    parser.add_argument("--aug_erasing_scale_max", type=float, default=0.050)
+    parser.add_argument("--aug_erasing_ratio_min", type=float, default=0.30)
+    parser.add_argument("--aug_erasing_ratio_max", type=float, default=3.30)
 
     # 分支输入开关（输入屏蔽式消融）
     parser.add_argument("--use_age", type=int, default=1)
@@ -316,14 +335,14 @@ def main():
     parser.add_argument("--rgb_branch_fusion_type", type=str, default="concat", choices=["concat", "residual"])
     parser.add_argument("--rgb_meta_hidden_dim", type=int, default=16)
     parser.add_argument("--rgb_meta_feat_dim", type=int, default=32)
+    parser.add_argument("--rgb_meta_dim", type=int, default=2, choices=[1, 2])
     parser.add_argument("--rgb_fusion_hidden_dim", type=int, default=128)
     parser.add_argument("--rgb_fusion_dropout", type=float, default=0.2)
     parser.add_argument("--rgb_delta_scale", type=float, default=0.3)
     parser.add_argument("--rgb_ckpt", type=str, default="")
     parser.add_argument("--rgb_pred_is_normalized", type=int, default=1)
     parser.add_argument("--freeze_rgb_branch", type=int, default=1)
-
-    #  PointNet++ branch
+    # PointNet++ 分支
     parser.add_argument("--point_normal_channel", type=int, default=0)
     parser.add_argument("--point_dropout", type=float, default=0.4)
     parser.add_argument("--point_ckpt", type=str, default="")
@@ -344,8 +363,8 @@ def main():
 
     # 优化
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--weight_decay", type=float, default=1e-6)
     parser.add_argument("--use_scheduler", type=int, default=1)
     parser.add_argument("--step_size", type=int, default=1)
     parser.add_argument("--gamma", type=float, default=0.98)
@@ -354,6 +373,9 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use_cpu", type=int, default=0)
     parser.add_argument("--resume", type=str, default="")
+    parser.add_argument("--resume_load_stats", type=int, default=1)
+    parser.add_argument("--resume_optimizer", type=int, default=1)
+    parser.add_argument("--resume_scheduler", type=int, default=1)
     parser.add_argument("--eval_only", type=int, default=0)
 
     args = parser.parse_args()
@@ -364,20 +386,41 @@ def main():
     print(f"[INFO] device = {device}")
 
     # ---------- 训练集统计量 ----------
-    label_mean, label_std = compute_scalar_stats(args.train_csv, "label")
-    age_mean, age_std = compute_scalar_stats(args.train_csv, "age")
-    weight_mean, weight_std = compute_scalar_stats(args.train_csv, "weight")
+    resume_ckpt_cpu = None
+    if args.resume.strip() != "" and os.path.isfile(args.resume):
+        resume_ckpt_cpu = torch.load(args.resume, map_location="cpu")
 
-    rgb_stats_cache = os.path.join(args.out_dir, "train_rgb_stats.json")
-    if str2boolint(args.compute_rgb_stats):
-        rgb_mean, rgb_std = compute_rgb_stats(
-            args.train_csv,
-            image_size=(args.image_h, args.image_w),
-            max_samples=args.rgb_stats_max_samples,
-            cache_json=rgb_stats_cache,
-        )
+    if (
+        resume_ckpt_cpu is not None
+        and str2boolint(args.resume_load_stats)
+        and isinstance(resume_ckpt_cpu, dict)
+        and "norm_stats" in resume_ckpt_cpu
+    ):
+        ckpt_stats = resume_ckpt_cpu["norm_stats"]
+        label_mean = float(ckpt_stats.get("label_mean", 0.0))
+        label_std = float(ckpt_stats.get("label_std", 1.0))
+        age_mean = float(ckpt_stats.get("age_mean", 0.0))
+        age_std = float(ckpt_stats.get("age_std", 1.0))
+        weight_mean = float(ckpt_stats.get("weight_mean", 0.0))
+        weight_std = float(ckpt_stats.get("weight_std", 1.0))
+        rgb_mean = tuple(float(x) for x in ckpt_stats.get("rgb_mean", [0.485, 0.456, 0.406]))
+        rgb_std = tuple(float(x) for x in ckpt_stats.get("rgb_std", [0.229, 0.224, 0.225]))
+        print("[INFO] 已从 resume checkpoint 读取并沿用归一化统计量。")
     else:
-        rgb_mean, rgb_std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+        label_mean, label_std = compute_scalar_stats(args.train_csv, "label")
+        age_mean, age_std = compute_scalar_stats(args.train_csv, "age")
+        weight_mean, weight_std = compute_scalar_stats(args.train_csv, "weight")
+
+        rgb_stats_cache = os.path.join(args.out_dir, "train_rgb_stats.json")
+        if str2boolint(args.compute_rgb_stats):
+            rgb_mean, rgb_std = compute_rgb_stats(
+                args.train_csv,
+                image_size=(args.image_h, args.image_w),
+                max_samples=args.rgb_stats_max_samples,
+                cache_json=rgb_stats_cache,
+            )
+        else:
+            rgb_mean, rgb_std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 
     norm_stats = {
         "label_mean": float(label_mean),
@@ -415,6 +458,23 @@ def main():
         weight_mean=weight_mean,
         weight_std=weight_std,
         check_files=str2boolint(args.check_files),
+        augment=str2boolint(args.augment_train),
+        aug_degrees=args.aug_degrees,
+        aug_translate=args.aug_translate,
+        aug_scale_min=args.aug_scale_min,
+        aug_scale_max=args.aug_scale_max,
+        aug_brightness=args.aug_brightness,
+        aug_contrast=args.aug_contrast,
+        aug_saturation_min=args.aug_saturation_min,
+        aug_saturation_max=args.aug_saturation_max,
+        aug_hue=args.aug_hue,
+        aug_grayscale_p=args.aug_grayscale_p,
+        aug_suppress_color_marks_p=args.aug_suppress_color_marks_p,
+        aug_erasing_p=args.aug_erasing_p,
+        aug_erasing_scale_min=args.aug_erasing_scale_min,
+        aug_erasing_scale_max=args.aug_erasing_scale_max,
+        aug_erasing_ratio_min=args.aug_erasing_ratio_min,
+        aug_erasing_ratio_max=args.aug_erasing_ratio_max,
     )
     val_dataset = create_dataset(
         csv_path=args.val_csv,
@@ -433,7 +493,12 @@ def main():
         weight_mean=weight_mean,
         weight_std=weight_std,
         check_files=str2boolint(args.check_files),
+        augment=False,
     )
+
+    if str2boolint(args.augment_train):
+        print("[INFO] 训练集已启用 RGB 增强：RandomAffine + ColorMarkSuppression + ColorJitter + Grayscale + RandomErasing")
+        print("[INFO] 验证/测试集不做随机增强，仅使用 Resize + Normalize。")
 
     train_loader = DataLoader(
         train_dataset,
@@ -464,6 +529,7 @@ def main():
         rgb_fusion_hidden_dim=args.rgb_fusion_hidden_dim,
         rgb_fusion_dropout=args.rgb_fusion_dropout,
         rgb_delta_scale=args.rgb_delta_scale,
+        rgb_meta_dim=args.rgb_meta_dim,
         use_age=str2boolint(args.use_age),
         use_weight=str2boolint(args.use_weight),
         point_normal_channel=str2boolint(args.point_normal_channel),
@@ -517,11 +583,19 @@ def main():
     log_rows: List[Dict] = []
 
     if args.resume.strip() != "":
-        ckpt = load_checkpoint(args.resume, model=model, optimizer=optimizer, scheduler=scheduler, map_location=device)
+        if not os.path.isfile(args.resume):
+            raise FileNotFoundError(f"未找到 resume checkpoint: {args.resume}")
+        optimizer_to_load = optimizer if str2boolint(args.resume_optimizer) else None
+        scheduler_to_load = scheduler if str2boolint(args.resume_scheduler) else None
+        ckpt = load_checkpoint(args.resume, model=model, optimizer=optimizer_to_load, scheduler=scheduler_to_load, map_location=device)
         start_epoch = int(ckpt.get("epoch", 0)) + 1
         best_val_mae = float(ckpt.get("best_val_mae", best_val_mae))
         print(f"[INFO] resume from: {args.resume}")
         print(f"[INFO] start_epoch={start_epoch}, best_val_mae={best_val_mae:.6f}")
+        if optimizer_to_load is None:
+            print(f"[INFO] 未加载 optimizer 状态，当前 --lr={args.lr} 会生效。")
+        if scheduler_to_load is None:
+            print("[INFO] 未加载 scheduler 状态。")
 
     if str2boolint(args.eval_only):
         ckpt_path = args.resume if args.resume.strip() != "" else best_model_path
@@ -609,6 +683,7 @@ def main():
         "fusion_type": args.fusion_type,
         "use_age": str2boolint(args.use_age),
         "use_weight": str2boolint(args.use_weight),
+        "rgb_meta_dim": int(args.rgb_meta_dim),
         "rgb_branch_fusion_type": args.rgb_branch_fusion_type,
     }
     save_json(summary, os.path.join(args.out_dir, "summary.json"))

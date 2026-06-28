@@ -1,12 +1,12 @@
 # PigBackfatFusion
 
-**Backfat thickness prediction in finishing pigs using multimodal information fusion in a sorting system**
+**Non-contact backfat thickness prediction in finishing pigs via multimodal feature fusion for pig sorting systems**
 
 PigBackfatFusion provides the code for a multimodal regression model for non-contact backfat thickness prediction in finishing pigs. The model integrates segmented pig-back RGB images, age and body-weight information, and 2048-point pig-back point clouds constructed from aligned RGB-D data.
 
 This repository is associated with the manuscript:
 
-> Backfat thickness prediction in finishing pigs using multimodal information fusion in a sorting system
+> Non-contact backfat thickness prediction in finishing pigs via multimodal feature fusion for pig sorting systems
 
 ## Repository structure
 
@@ -116,8 +116,8 @@ python train.py \
   --freeze_point_branch 1 \
   --epochs 100 \
   --batch_size 64 \
-  --lr 1e-3 \
-  --weight_decay 1e-4
+  --lr 1e-5 \
+  --weight_decay 1e-6
 ```
 
 ## Pretrained weights and normalization statistics
@@ -175,6 +175,6 @@ The complete raw RGB-D video data are not included in the public dataset because
 
 This repository is associated with the manuscript:
 
-**Backfat thickness prediction in finishing pigs using multimodal information fusion in a sorting system**
+**Non-contact backfat thickness prediction in finishing pigs via multimodal feature fusion for pig sorting systems**
 
 The formal citation information will be updated after publication.
