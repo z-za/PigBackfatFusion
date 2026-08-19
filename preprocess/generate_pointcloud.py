@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Generate segmented RGB images, segmented depth images, and pig-back point clouds
-from RGB-D images and YOLO segmentation masks.
+from RGB-D images and YOLO segmentation masks. In the output point clouds, the
+z coordinate represents the physical height above the local supporting plane.
 """
 
 import argparse
@@ -21,6 +22,7 @@ DEFAULT_INTRINSICS = {
 }
 
 DEFAULT_DEPTH_SCALE_M = 0.001
+DEFAULT_CAMERA_HEIGHT_M = 1.63
 
 
 def parse_args():
@@ -54,6 +56,15 @@ def parse_args():
         type=float,
         default=DEFAULT_DEPTH_SCALE_M,
         help="Scale factor used to convert depth values to metres. Use 0.001 if depth is stored in millimetres."
+    )
+    parser.add_argument(
+        "--camera_height_m",
+        type=float,
+        default=DEFAULT_CAMERA_HEIGHT_M,
+        help=(
+            "Vertical distance in metres from the camera optical centre to "
+            "the local supporting plane (default: 1.63)."
+        )
     )
     parser.add_argument(
         "--min_depth_m",
@@ -381,6 +392,7 @@ def make_segmented_pointcloud(
     rgb_img,
     intr,
     depth_scale_m,
+    camera_height_m,
     min_depth_m,
     max_depth_m
 ):
@@ -402,11 +414,16 @@ def make_segmented_pointcloud(
 
     v, u = np.where(valid)
 
-    z = depth_m[v, u]
-    x = (u.astype(np.float32) - float(cx)) * z / float(fx)
-    y = (v.astype(np.float32) - float(cy)) * z / float(fy)
+    # Camera-coordinate axial depth must be used for pinhole back-projection.
+    z_camera = depth_m[v, u]
+    x = (u.astype(np.float32) - float(cx)) * z_camera / float(fx)
+    y = (v.astype(np.float32) - float(cy)) * z_camera / float(fy)
 
-    xyz = np.stack([x, y, z], axis=1).astype(np.float32)
+    # The camera is mounted vertically downward. Convert camera depth to the
+    # physical height of each pig-back point above the supporting plane.
+    z_height = float(camera_height_m) - z_camera
+
+    xyz = np.stack([x, y, z_height], axis=1).astype(np.float32)
 
     # cv2 reads RGB image as BGR. Convert BGR to RGB for PLY color.
     rgb = rgb_img[v, u][:, ::-1].copy().astype(np.uint8)
@@ -420,6 +437,7 @@ def process_one_folder_pair(
     lvl2,
     manual_intrinsics,
     manual_depth_scale_m,
+    camera_height_m,
     min_depth_m,
     max_depth_m,
     auto_resize_rgb_to_depth,
@@ -584,6 +602,7 @@ def process_one_folder_pair(
                 rgb_img=rgb,
                 intr=intr,
                 depth_scale_m=depth_scale_m,
+                camera_height_m=camera_height_m,
                 min_depth_m=min_depth_m,
                 max_depth_m=max_depth_m
             )
@@ -620,6 +639,15 @@ def main():
     if not excel_path.exists():
         raise FileNotFoundError(f"excel_path does not exist: {excel_path}")
 
+    if args.camera_height_m <= 0:
+        raise ValueError("camera_height_m must be greater than zero.")
+
+    if args.min_depth_m < 0 or args.max_depth_m <= args.min_depth_m:
+        raise ValueError(
+            "The valid depth range must satisfy "
+            "0 <= min_depth_m < max_depth_m."
+        )
+
     manual_intrinsics = {
         "fx": args.fx,
         "fy": args.fy,
@@ -635,6 +663,7 @@ def main():
     print(f"[INFO] folder pairs parsed from Excel: {len(pairs)}")
     print(f"[INFO] manual_intrinsics = {manual_intrinsics}")
     print(f"[INFO] manual_depth_scale_m = {args.depth_scale_m}")
+    print(f"[INFO] camera_height_m = {args.camera_height_m}")
     print(f"[INFO] valid depth range = [{args.min_depth_m}, {args.max_depth_m}] m")
     print(f"[INFO] auto_resize_rgb_to_depth = {args.auto_resize_rgb_to_depth}")
     print(f"[INFO] skip_existing = {args.skip_existing}")
@@ -654,6 +683,7 @@ def main():
             lvl2=lvl2,
             manual_intrinsics=manual_intrinsics,
             manual_depth_scale_m=args.depth_scale_m,
+            camera_height_m=args.camera_height_m,
             min_depth_m=args.min_depth_m,
             max_depth_m=args.max_depth_m,
             auto_resize_rgb_to_depth=args.auto_resize_rgb_to_depth,
