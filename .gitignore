@@ -1,0 +1,52 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# Training outputs
+outputs/
+runs/
+results/
+log/
+logs/
+checkpoints/
+exp/
+mux/
+muxres/
+
+# Large or raw full datasets
+# Keep complete datasets outside the code repository unless they are intentionally tracked.
+data/
+raw_data/
+full_dataset/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.npy
+*.npz
+
+# Point clouds are ignored by default, but the real small examples are tracked.
+*.ply
+!data_example/**
+
+# Model checkpoints are ignored by default, but pretrained branch weights in weight/ are tracked intentionally.
+*.pth
+*.pt
+*.onnx
+!weight/*.pth
+!weight/*.pt
+!weight/*.onnx
+
+# System files
+.DS_Store
+Thumbs.db
